@@ -1,0 +1,123 @@
+// syntax.pest
+
+program     = { import_stmt* ~ (declaration | function_call | member_access ~ ";" | WHITE_SPACE*) }
+import_stmt = { "import" ~ module_name ~ ";" }
+module_name = { identifier ~ ("." ~ identifier)* }
+
+declaration = {
+    const_declaration
+  | var_declaration
+  | class_declaration
+  | interface_declaration
+  | function_declaration
+}
+
+definition = { "=" ~ expression }
+
+var_declaration       = { "let" ~ type? ~ identifier ~ definition? ~ ";" }
+const_declaration     = { access_modifier? ~ "const" ~ type ~ identifier ~ "=" ~ expression ~ ";" }
+class_declaration     = { access_modifier? ~ ("static")? ~ "class" ~ identifier ~ "{" ~ member* ~ "}" }
+interface_declaration = { access_modifier? ~ "interface" ~ identifier ~ "{" ~ interface_member* ~ "}" }
+function_declaration  = { access_modifier? ~ ("async")? ~ "function" ~ identifier ~ type_argument? ~ "(" ~ parameter_list? ~ ")" ~ "->" ~ type? ~ block }
+
+parameter_list = { parameter ~ ("," ~ parameter)* }
+parameter      = { identifier ~ ":" ~ type }
+
+// Class & Interface members declaration
+property_declaration          = { access_modifier? ~ ("static")? ~ ("readonly")? ~ identifier ~ definition? ~ ";" }
+method_declaration            = { access_modifier? ~ ("static")? ~ ("async")? ~ identifier ~ type_argument? ~ "(" ~ parameter_list? ~ ")" ~ "->" ~ type? ~ block }
+inerface_property_declaration = { access_modifier? ~ ("readonly")? ~ identifier ~ ":" ~ type ~ ";" }
+
+access_modifier = { "public" | "private" | "protected" }
+
+member = {
+    property_declaration
+  | method_declaration
+}
+
+interface_member = {
+    inerface_property_declaration
+}
+
+stmt = {
+    expression ~ ";"
+  | "await" ~ expression ~ ";"
+  | const_declaration
+  | var_declaration
+  | block
+  | if_stmt
+  | while_stmt
+  | for_stmt
+}
+
+expression = {
+    binary_expression
+  | unary_expression
+  | prefix_expression
+  | postfix_expression
+  | member_access
+}
+
+unary_expression = {
+    identifier
+  | literal
+  | function_call
+  | "(" ~ expression ~ ")"
+}
+
+binary_expression = {
+    unary_expression ~ binary_operator ~ unary_expression
+}
+
+prefix_expression = {
+    prefix_operator ~ identifier
+}
+
+postfix_expression = {
+    identifier ~ postfix_operator
+}
+
+literal = {
+    number_literal
+  | string_literal
+  | boolean_literal
+}
+
+// Literals
+number_literal  = { ("-")? ~ ASCII_DIGIT+ }
+string_literal  = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+boolean_literal = { "true" | "false" }
+
+block = { "{" ~ stmt* ~ "}" }
+
+// Statements
+if_stmt    = { "if" ~ "(" ~ expression ~ ")" ~ block ~ ("else" ~ (block | if_stmt))? }
+while_stmt = { "while" ~ "(" ~ expression ~ ")" ~ block }
+for_stmt   = {
+    "for" ~ "(" ~ ("let" ~ type? ~ identifier ~ definition ~ ";" ~ binary_expression ~ ";" ~ postfix_expression | identifier ~ "in" ~ identifier) ~ ")" ~ block
+}
+
+function_call = { identifier ~ type_argument? ~ "(" ~ arg_list? ~ ")" }
+method_call   = { function_call }
+arg_list      = { expression ~ ("," ~ expression)* }
+
+member_access_infix = { unary_expression ~ ("." | "::") ~ (method_call | identifier) }
+member_access       = { (unary_expression | member_access_infix) ~ ("." | "::") ~ (method_call | identifier) }
+
+// Types
+type          = { simple_type | generic_type | type_array }
+type_array    = { simple_type ~ "[]" | generic_type ~ "[]" }
+simple_type   = { "Int" | "String" | "Bool" | "Float" | void | identifier }
+void          = { "void" }
+generic_type  = { ("Future" | "Array" | "Option" | identifier) ~ type_argument }
+type_argument = { "<" ~ type ~ ("|" ~ type)* ~ ">" }
+
+identifier = { ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+
+binary_operator  = { "+" | "-" | "*" | "/" | "#" | "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" }
+prefix_operator  = { "!" }
+postfix_operator = { "++" | "--" }
+
+// Token definitions
+WHITESPACE         = _{ " " | "\t" | "\n" | "\r" }
+ASCII_ALPHANUMERIC = _{ ASCII_ALPHA | ASCII_DIGIT }
