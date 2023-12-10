@@ -1,3 +1,5 @@
-import std.Console;
+import std.io.Console;
 
-Console::println("Hello World!");
+let String message = "Hello World!";
+
+Console::println(message);

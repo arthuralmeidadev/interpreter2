@@ -1,16 +1,24 @@
 #![allow(dead_code)]
+use colored::Colorize;
 use pest::{iterators::Pair, Parser};
 use pest_derive::Parser;
-use std::fs;
+use std::{fs, ops::Deref};
 use structure::{
-    unbox, AffixExpression, ArgsList, BinaryExpression, ExecutionContext, Expression, FunctionCall,
-    ImportedModule, ImportedModules, MemberAccess, MemberAccessKind, UnaryExpression,
-    UnaryExpressionKind,
+    unbox, AccessModifier, AffixExpression, Argument, BinaryExpression, ClassDeclaration,
+    ClassMethod, Declaration, DeclarationKind, ExecutionContext, Expression, ExpressionKind,
+    FunctionCall, ImportedModule, ImportedModules, MemberAccess, MemberAccessKind, Type, TypeKind,
+    UnaryExpression, UnaryExpressionKind, VarDeclaration,
 };
 
+mod errors;
 mod standard_library;
 mod structure;
 use standard_library::{ConsoleModule, StandardLibrary};
+
+use crate::{
+    errors::{throw_undefined, throw_undefined_class_error},
+    structure::ArgumentKind,
+};
 
 #[derive(Parser)]
 #[grammar = "src/grammar.pest"]
@@ -42,10 +50,24 @@ fn handle_import_stmt(pair: Pair<'_, Rule>) -> ImportedModule {
     module
 }
 
-fn handle_args_list(pair: Pair<'_, Rule>) -> ArgsList {
-    let mut args_list = ArgsList::default();
+fn handle_args_list(pair: Pair<'_, Rule>) -> Vec<Argument> {
+    let mut args_list = Vec::new();
     for inner_pair in pair.into_inner() {
-        args_list.args.push(handle_expression(inner_pair));
+        match inner_pair.as_rule() {
+            Rule::expression => {
+                let mut argument = Argument::default();
+                argument.argument_kind = ArgumentKind::EXPRESSION;
+                argument.expression = Some(handle_expression(inner_pair));
+                args_list.push(argument);
+            }
+            Rule::identifier => {
+                let mut argument = Argument::default();
+                argument.argument_kind = ArgumentKind::IDENTIFIER;
+                argument.identifier = Some(inner_pair.as_str().to_string());
+                args_list.push(argument);
+            }
+            _ => {}
+        }
     }
 
     args_list
@@ -216,9 +238,119 @@ fn handle_member_access(pair: Pair<'_, Rule>) -> MemberAccess {
     member_access
 }
 
-fn solve_expression(expression: Expression) {
+fn handle_type(pair: Pair<'_, Rule>) -> Type {
+    let mut type_def = Type::default();
+    let type_pair = pair.into_inner().next().unwrap();
 
+    match type_pair.as_rule() {
+        Rule::simple_type => {
+            type_def.type_identifier = type_pair.as_str().to_string();
+            type_def.type_kind = TypeKind::SIMPLE
+        }
+        Rule::generic_type => {
+            type_def.type_kind = TypeKind::GENERIC;
+            type_def.type_identifier = type_pair
+                .clone()
+                .into_inner()
+                .nth(0)
+                .unwrap()
+                .as_str()
+                .to_string();
+            for type_parameter_identifier in type_pair.into_inner().nth(1).unwrap().into_inner() {
+                type_def
+                    .type_parameters
+                    .push(type_parameter_identifier.as_str().to_string());
+            }
+        }
+        Rule::type_array => {
+            type_def.type_kind = TypeKind::TYPEARRAY;
+            type_def.is_type_array = true;
+
+            type_def.type_identifier = type_pair
+                .clone()
+                .into_inner()
+                .nth(0)
+                .unwrap()
+                .as_str()
+                .to_string();
+
+            for sub_type_pair in type_pair.into_inner() {
+                match sub_type_pair.as_rule() {
+                    Rule::simple_type => {
+                        type_def.type_identifier = sub_type_pair.as_str().to_string().clone();
+                    }
+                    Rule::generic_type => {
+                        for type_parameter_identifier in
+                            sub_type_pair.into_inner().nth(1).unwrap().into_inner()
+                        {
+                            type_def
+                                .type_parameters
+                                .push(type_parameter_identifier.as_str().to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {
+            type_def.type_identifier = type_pair.as_str().to_string();
+            type_def.type_kind = TypeKind::TYPEARRAY;
+        }
+    }
+
+    type_def
 }
+
+fn handle_var_declaration(pair: Pair<'_, Rule>) -> VarDeclaration {
+    let mut var_declaration = VarDeclaration::default();
+
+    for inner_pair in pair.into_inner() {
+        match inner_pair.as_rule() {
+            Rule::r#type => {
+                var_declaration.type_def = handle_type(inner_pair);
+            }
+            Rule::identifier => {
+                var_declaration.identifier = handle_identifier(inner_pair);
+            }
+            Rule::definition => {
+                var_declaration.definition =
+                    Some(handle_expression(inner_pair.into_inner().next().unwrap()));
+            }
+            _ => {}
+        }
+    }
+
+    var_declaration
+}
+
+fn handle_declaration(pair: Pair<'_, Rule>) -> Declaration {
+    let mut declaration = Declaration::default();
+
+    for inner_pair in pair.into_inner() {
+        match inner_pair.as_rule() {
+            Rule::var_declaration => {
+                declaration.var_declaration = Some(handle_var_declaration(inner_pair));
+            }
+            Rule::const_declaration => {
+                declaration.declaration_kind = DeclarationKind::CONST;
+            }
+            Rule::class_declaration => {
+                declaration.declaration_kind = DeclarationKind::CLASS;
+            }
+            Rule::function_declaration => {
+                declaration.declaration_kind = DeclarationKind::FUNCTION;
+            }
+            Rule::interface_declaration => {
+                declaration.declaration_kind = DeclarationKind::INTERFACE;
+            }
+            _ => {}
+        }
+    }
+
+    declaration
+}
+
+fn solve_expression(expression: Expression) {}
 
 fn main() {
     let input_code = read_file("tests/1.ws");
@@ -227,19 +359,57 @@ fn main() {
         Ok(program_pairs) => {
             for program_pair in program_pairs {
                 let mut imported_modules = ImportedModules::default();
+                let mut global_execution_context = ExecutionContext::default();
+                let mut line: usize = 1;
+
+                // println!("{program_pair:#?}");
 
                 for inner_pair in program_pair.into_inner() {
-                    // println!("{:#?}", inner_pair);
-
                     match inner_pair.as_rule() {
                         Rule::program => {}
-                        Rule::import_stmt => imported_modules
-                            .modules
-                            .push(handle_import_stmt(inner_pair)),
+                        Rule::import_stmt => {
+                            let module = handle_import_stmt(inner_pair);
+                            // let module_name = module.name.clone();
+                            imported_modules.modules.push(module);
+
+                            // match module_name.as_str() {
+                            //     "Console" => {
+                            //         let mut console_class = ClassDeclaration::default();
+                            //         let mut print_method = ClassMethod::default();
+                            //         print_method.access_modifier = AccessModifier::PUBLIC;
+                            //         print_method.is_static = true;
+                            //         print_method.identifier = String::from("print");
+                            //         print_method.identifier = String::from("print");
+
+                            //         console_class.is_static = true;
+
+                            //         console_class.methods.push(print_method);
+
+                            //         global_execution_context.scoped_classes.push(console_class);
+                            //     }
+                            //     _ => {}
+                            // }
+                        }
                         Rule::module_name => {}
-                        Rule::declaration => {}
+                        Rule::declaration => {
+                            let declaration = handle_declaration(inner_pair);
+
+                            match declaration.declaration_kind {
+                                DeclarationKind::VAR => {
+                                    global_execution_context
+                                        .scoped_variables
+                                        .push(declaration.var_declaration.unwrap());
+                                }
+                                DeclarationKind::CONST => todo!(),
+                                DeclarationKind::CLASS => todo!(),
+                                DeclarationKind::INTERFACE => todo!(),
+                                DeclarationKind::FUNCTION => todo!(),
+                            }
+                        }
                         Rule::definition => {}
-                        Rule::var_declaration => {}
+                        Rule::var_declaration => global_execution_context
+                            .scoped_variables
+                            .push(handle_var_declaration(inner_pair)),
                         Rule::const_declaration => {}
                         Rule::class_declaration => {}
                         Rule::interface_declaration => {}
@@ -248,10 +418,9 @@ fn main() {
                         Rule::parameter => {}
                         Rule::property_declaration => {}
                         Rule::method_declaration => {}
-                        Rule::inerface_property_declaration => {}
+                        Rule::interface_method_declaration => {}
                         Rule::access_modifier => {}
                         Rule::member => {}
-                        Rule::interface_member => {}
                         Rule::stmt => {}
                         Rule::expression => {
                             let expression = handle_expression(inner_pair);
@@ -288,14 +457,151 @@ fn main() {
                         }
                         Rule::member_access_infix => {}
                         Rule::member_access => {
+                            let span_str = inner_pair.as_str();
                             let member = handle_member_access(inner_pair);
 
                             match member.parent.as_str() {
                                 "Console" => {
+                                    let found_module = imported_modules
+                                        .modules
+                                        .iter()
+                                        .find(|module| module.name == "Console");
+
+                                    match found_module {
+                                        Some(t) => {}
+                                        None => {
+                                            println!("{:}", throw_undefined_class_error(
+                                                "Console",
+                                                span_str,
+                                                0,
+                                                line,
+                                                "Consider importing this module with `import std.Console;`",
+                                            )
+                                            .as_str());
+                                            std::process::exit(1);
+                                        }
+                                    }
+
                                     match member.identifier.as_str() {
+                                        "print" => {
+                                            for arg in member.args_list {
+                                                let mut value = String::new();
+                                                match arg.argument_kind {
+                                                    ArgumentKind::EXPRESSION => {
+                                                        let expression = arg.expression.unwrap();
+                                                        match expression.expression_kind {
+                                                            ExpressionKind::UNARY => {
+                                                                // let variable_name = expression
+                                                                //     .unary_expression
+                                                                //     .unwrap()
+                                                                //     .string_value
+                                                                //     .unwrap()
+                                                                //     .replace('"', "");
+                                                            }
+                                                            ExpressionKind::BINARY => {}
+                                                            ExpressionKind::MEMBERACCESS => {}
+                                                            ExpressionKind::PREFIX => {}
+                                                            ExpressionKind::POSTFIX => {}
+                                                        }
+                                                    }
+                                                    ArgumentKind::IDENTIFIER => {
+                                                        let identifier_node =
+                                                            &global_execution_context
+                                                                .scoped_variables
+                                                                .iter()
+                                                                .find(|variable| {
+                                                                    variable.identifier
+                                                                        == arg
+                                                                            .identifier
+                                                                            .clone()
+                                                                            .unwrap()
+                                                                });
+
+                                                        value = identifier_node
+                                                            .clone()
+                                                            .unwrap()
+                                                            .clone()
+                                                            .definition
+                                                            .unwrap()
+                                                            .unary_expression
+                                                            .unwrap()
+                                                            .string_value
+                                                            .unwrap()
+                                                            .replace('"', "");
+                                                    }
+                                                }
+
+                                                ConsoleModule::print(value);
+                                            }
+                                        }
+
                                         "println" => {
-                                            for arg in member.args_list.args {
-                                                ConsoleModule::println(arg.unary_expression.unwrap().string_value.unwrap());
+                                            for arg in member.args_list {
+                                                let mut value = String::new();
+                                                match arg.argument_kind {
+                                                    ArgumentKind::EXPRESSION => {
+                                                        let expression = arg.expression.unwrap();
+                                                        match expression.expression_kind {
+                                                            ExpressionKind::UNARY => {
+                                                                // let variable_name = expression
+                                                                //     .unary_expression
+                                                                //     .unwrap()
+                                                                //     .string_value
+                                                                //     .unwrap()
+                                                                //     .replace('"', "");
+                                                            }
+                                                            ExpressionKind::BINARY => {}
+                                                            ExpressionKind::MEMBERACCESS => {}
+                                                            ExpressionKind::PREFIX => {}
+                                                            ExpressionKind::POSTFIX => {}
+                                                        }
+                                                    }
+                                                    ArgumentKind::IDENTIFIER => {
+                                                        let identifier_node =
+                                                            &global_execution_context
+                                                                .scoped_variables
+                                                                .iter()
+                                                                .find(|variable| {
+                                                                    variable.identifier
+                                                                        == arg
+                                                                            .identifier
+                                                                            .clone()
+                                                                            .unwrap()
+                                                                });
+
+                                                        match identifier_node {
+                                                            Some(t) => {}
+                                                            None => {
+                                                                println!(
+                                                                    "{:}",
+                                                                    throw_undefined(
+                                                                        arg.identifier
+                                                                            .unwrap()
+                                                                            .as_str(),
+                                                                        span_str,
+                                                                        17,
+                                                                        line,
+                                                                    )
+                                                                );
+                                                                std::process::exit(1);
+                                                            }
+                                                        }
+
+                                                        value = identifier_node
+                                                            .clone()
+                                                            .unwrap()
+                                                            .clone()
+                                                            .definition
+                                                            .unwrap()
+                                                            .unary_expression
+                                                            .unwrap()
+                                                            .string_value
+                                                            .unwrap()
+                                                            .replace('"', "");
+                                                    }
+                                                }
+
+                                                ConsoleModule::println(value);
                                             }
                                         }
                                         _ => {}
@@ -303,7 +609,6 @@ fn main() {
                                 }
                                 _ => {}
                             }
-                            // println!("{:#?}", member);
                         }
                         Rule::r#type => {}
                         Rule::type_array => {}
@@ -322,6 +627,10 @@ fn main() {
                         Rule::WHITESPACE => {}
                         Rule::ASCII_ALPHANUMERIC => {}
                         Rule::block => {}
+                        Rule::new_line => {
+                            line += 1;
+                        }
+                        _ => {}
                     }
                 }
             }
