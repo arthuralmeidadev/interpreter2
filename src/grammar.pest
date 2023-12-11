@@ -112,7 +112,7 @@ member_access       = { (unary_expression | member_access_infix*) ~ (method_call
 // Types
 type           = { simple_type | generic_type | type_array }
 type_array     = { simple_type ~ "[]" | generic_type ~ "[]" }
-simple_type    = { "Int" | "String" | "Bool" | "Float" | void | identifier }
+simple_type    = { "int" | "string" | "bool" | "float" | void | identifier }
 void           = { "void" }
 generic_type   = { ("Future" | "Array" | "Nullable" | "Result" | identifier) ~ type_parameter }
 type_parameter = { "<" ~ identifier ~ ("|" ~ identifier)* ~ ">" }

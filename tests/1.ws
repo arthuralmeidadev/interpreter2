@@ -1,5 +1,5 @@
 import std.io.Console;
 
-let String message = "Hello World!";
+let string message = "Hello World!";
 
 Console::println(message);
